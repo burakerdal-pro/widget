@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Takvim Widget</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: Segoe UI, sans-serif; }
+  .card {
+    box-sizing: border-box; height: 100%; padding: 10px;
+    background: rgba(30, 30, 30, 0.88); color: #fff; border-radius: 16px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  .top { display: flex; gap: 6px; align-items: center; }
+  .drag { -webkit-app-region: drag; cursor: move; flex: 1; height: 22px; border-radius: 8px; background: rgba(255,255,255,0.15); }
+  .btn { -webkit-app-region: no-drag; border: none; border-radius: 8px; background: rgba(255,255,255,0.15); color: #fff; height: 24px; padding: 0 8px; font-size: 12px; }
+  .btn:hover { background: rgba(255,255,255,0.28); }
+  #close:hover { background: #c0392b; }
+  .nav { display: flex; align-items: center; gap: 6px; }
+  #month { flex: 1; font-size: 16px; font-weight: 600; }
+  .week, .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .week div { font-size: 11px; color: #999; text-align: center; }
+  .cell { height: 58px; box-sizing: border-box; background: rgba(255,255,255,0.06); border-radius: 6px; padding: 3px; overflow: hidden; cursor: pointer; border: 1px solid transparent; }
+  .cell.other { opacity: 0.4; }
+  .cell.today { border-color: #8ab4f8; }
+  .cell.sel { background: rgba(138,180,248,0.25); }
+  .num { font-size: 11px; color: #ddd; margin-bottom: 1px; }
+  .chip { font-size: 9px; line-height: 12px; border-radius: 3px; padding: 0 3px; margin-bottom: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip.ev { background: #3b6fd4; }
+  .chip.tk { background: #c77d1a; }
+  .more { font-size: 9px; color: #aaa; }
+  #detail { flex: 1; overflow-y: auto; padding-right: 4px; min-height: 0; }
+  #detail::-webkit-scrollbar { width: 6px; }
+  #detail::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 3px; }
+  h3 { font-size: 13px; margin: 8px 0 5px; color: #8ab4f8; }
+  h3:first-child { margin-top: 0; }
+  .row { background: rgba(255,255,255,0.08); border-left: 3px solid #3b6fd4; border-radius: 6px; padding: 5px 8px; margin-bottom: 5px; font-size: 13px; }
+  .row .t { font-size: 11px; color: #bbb; }
+  .row .l { font-size: 11px; color: #999; }
+  .task { display: flex; align-items: center; gap: 8px; border-left-color: #c77d1a; }
+  .task.done span { text-decoration: line-through; color: #888; }
+  .task span { flex: 1; }
+  .task .x { border: none; background: none; color: #999; font-size: 13px; }
+  .task .x:hover { color: #e74c3c; }
+  .msg { color: #bbb; font-size: 12px; padding: 4px 0; }
+  .add { display: flex; gap: 5px; }
+  .add input { box-sizing: border-box; border: none; border-radius: 8px; padding: 6px 8px; font-size: 12px; background: rgba(255,255,255,0.15); color: #fff; font-family: inherit; }
+  #newText { flex: 1; min-width: 0; }
+  #newText::placeholder { color: #aaa; }
+  #newDate { width: 118px; color-scheme: dark; }
+  #status { font-size: 10px; color: #888; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <div class="drag" title="Sürüklemek için tut"></div>
+      <button class="btn" id="open" title="Google Takvim uygulamasını aç">📅 Google Takvim</button>
+      <button class="btn" id="close" title="Kapat">✕</button>
+    </div>
+    <div class="nav">
+      <button class="btn" id="prev">‹</button>
+      <div id="month"></div>
+      <button class="btn" id="today">Bugün</button>
+      <button class="btn" id="next">›</button>
+    </div>
+    <div class="week"><div>Pzt</div><div>Sal</div><div>Çar</div><div>Per</div><div>Cum</div><div>Cmt</div><div>Paz</div></div>
+    <div class="grid" id="grid"></div>
+    <div id="detail"></div>
+    <div class="add">
+      <input id="newText" placeholder="Yeni görev ekle...">
+      <input id="newDate" type="date">
+      <button class="btn" id="addBtn">Ekle</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const pad = (n) => String(n).padStart(2, '0');
+  const key = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  const MONTHS = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const hm = (ms) => new Date(ms).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  let view = new Date(); view.setDate(1);
+  let selected = key(new Date());
+  let events = [], tasks = [], byDay = {};
+  let info = '';
+
+  function indexEvents() {
+    byDay = {};
+    events.forEach((e) => {
+      const s = new Date(e.start);
+      let last = new Date(e.allDay ? e.end - 1 : e.end);
+      if (last < s) last = s;
+      const d = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      let n = 0;
+      while (d <= last && n++ < 31) {
+        (byDay[key(d)] = byDay[key(d)] || []).push(e);
+        d.setDate(d.getDate() + 1);
+      }
+    });
+  }
+
+  const tasksOn = (k) => tasks.filter((t) => t.date === k);
+  const saveTasks = () => window.api.saveTasks(tasks);
+
+  function renderGrid() {
+    $('month').textContent = MONTHS[view.getMonth()] + ' ' + view.getFullYear();
+    const grid = $('grid');
+    grid.innerHTML = '';
+    const first = new Date(view.getFullYear(), view.getMonth(), 1);
+    const start = new Date(first);
+    start.setDate(1 - ((first.getDay() + 6) % 7));
+    const todayKey = key(new Date());
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const k = key(d);
+      const cell = el('div', 'cell');
+      if (d.getMonth() !== view.getMonth()) cell.classList.add('other');
+      if (k === todayKey) cell.classList.add('today');
+      if (k === selected) cell.classList.add('sel');
+      cell.appendChild(el('div', 'num', String(d.getDate())));
+      const items = [];
+      (byDay[k] || []).forEach((e) => items.push(['ev', e.title]));
+      tasksOn(k).filter((t) => !t.done).forEach((t) => items.push(['tk', t.text]));
+      items.slice(0, 2).forEach((it) => cell.appendChild(el('div', 'chip ' + it[0], it[1])));
+      if (items.length > 2) cell.appendChild(el('div', 'more', '+' + (items.length - 2) + ' daha'));
+      cell.onclick = () => { selected = k; $('newDate').value = k; renderGrid(); renderDetail(); };
+      grid.appendChild(cell);
+    }
+  }
+
+  function taskRow(t) {
+    const row = el('div', 'row task' + (t.done ? ' done' : ''));
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = t.done;
+    cb.onchange = () => { t.done = cb.checked; saveTasks(); renderGrid(); renderDetail(); };
+    const x = el('button', 'x', '✕');
+    x.onclick = () => { tasks = tasks.filter((u) => u.id !== t.id); saveTasks(); renderGrid(); renderDetail(); };
+    row.appendChild(cb);
+    row.appendChild(el('span', '', t.text));
+    row.appendChild(x);
+    return row;
+  }
+
+  function renderDetail() {
+    const box = $('detail');
+    box.innerHTML = '';
+    const [y, m, d] = selected.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    box.appendChild(el('h3', '', date.toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' })));
+
+    const evs = byDay[selected] || [];
+    evs.forEach((e) => {
+      const row = el('div', 'row');
+      row.appendChild(el('div', 't', e.allDay ? 'Tüm gün' : hm(e.start) + ' – ' + hm(e.end)));
+      row.appendChild(el('div', '', e.title));
+      if (e.location) row.appendChild(el('div', 'l', e.location));
+      box.appendChild(row);
+    });
+    const dayTasks = tasksOn(selected);
+    dayTasks.forEach((t) => box.appendChild(taskRow(t)));
+    if (!evs.length && !dayTasks.length) box.appendChild(el('div', 'msg', 'Bu gün için etkinlik ya da görev yok.'));
+
+    const undated = tasks.filter((t) => !t.date);
+    if (undated.length) {
+      box.appendChild(el('h3', '', 'Tarihsiz görevler'));
+      undated.forEach((t) => box.appendChild(taskRow(t)));
+    }
+  }
+
+  function addTask() {
+    const text = $('newText').value.trim();
+    if (!text) return;
+    tasks.push({ id: Date.now() + '' + Math.random().toString(16).slice(2), text, date: $('newDate').value, done: false });
+    $('newText').value = '';
+    saveTasks();
+    if ($('newDate').value) selected = $('newDate').value;
+    renderGrid(); renderDetail();
+  }
+
+  async function refresh() {
+    const res = await window.api.getEvents();
+    if (res.ok) {
+      events = res.events;
+      info = 'Takvim dosyasında ' + res.total + ' etkinlik okundu, bu aralıkta ' + res.events.length + ' tanesi var. Güncellendi: ' + hm(Date.now());
+      indexEvents();
+    } else {
+      info = 'Takvim hatası: ' + res.error;
+    }
+    $('status').textContent = info;
+    renderGrid(); renderDetail();
+  }
+
+  $('prev').onclick = () => { view.setMonth(view.getMonth() - 1); renderGrid(); };
+  $('next').onclick = () => { view.setMonth(view.getMonth() + 1); renderGrid(); };
+  $('today').onclick = () => { view = new Date(); view.setDate(1); selected = key(new Date()); $('newDate').value = selected; renderGrid(); renderDetail(); };
+  $('open').onclick = () => window.api.openCalendar();
+  $('close').onclick = () => window.api.close();
+  $('addBtn').onclick = addTask;
+  $('newText').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTask(); });
+
+  (async function init() {
+    $('newDate').value = selected;
+    tasks = await window.api.loadTasks();
+    renderGrid(); renderDetail();
+    refresh();
+    setInterval(refresh, 10 * 60 * 1000);
+  })();
+</script>
+</body>
+</html>
